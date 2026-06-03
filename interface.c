@@ -77,6 +77,7 @@ enum {
 	IFACE_ATTR_IP6WEIGHT,
 	IFACE_ATTR_TAGS,
 	IFACE_ATTR_CARRIER_LOSS_DELAY,
+	IFACE_ATTR_PERSISTENT,
 	IFACE_ATTR_MAX
 };
 
@@ -109,6 +110,7 @@ static const struct blobmsg_policy iface_attrs[IFACE_ATTR_MAX] = {
 	[IFACE_ATTR_IP6WEIGHT] = { .name = "ip6weight", .type = BLOBMSG_TYPE_INT32 },
 	[IFACE_ATTR_TAGS] = { .name = "tags", .type = BLOBMSG_TYPE_ARRAY },
 	[IFACE_ATTR_CARRIER_LOSS_DELAY] = { .name = "carrier_loss_delay", .type = BLOBMSG_TYPE_INT32 },
+	[IFACE_ATTR_PERSISTENT] = { .name = "persistent", .type = BLOBMSG_TYPE_BOOL },
 };
 
 const struct uci_blob_param_list interface_attr_list = {
@@ -402,7 +404,7 @@ interface_check_state(struct interface *iface)
 		if (!iface->enabled || !link_state) {
 			uloop_timeout_cancel(&iface->carrier_loss_timer);
 			iface->state = IFS_TEARDOWN;
-			if (iface->dynamic)
+			if (iface->dynamic && (!iface->persistent || !iface->enabled))
 				__set_config_state(iface, IFC_REMOVE);
 
 			interface_proto_event(iface->proto, PROTO_CMD_TEARDOWN, false);
@@ -502,9 +504,11 @@ interface_jail_pending_clear(struct interface *iface)
 static void
 interface_main_dev_cb(struct device_user *dep, enum device_event ev)
 {
+	enum interface_state state;
 	struct interface *iface;
 
 	iface = container_of(dep, struct interface, main_dev);
+	state = iface->state;
 	switch (ev) {
 	case DEV_EVENT_ADD:
 		interface_set_available(iface, true);
@@ -516,6 +520,23 @@ interface_main_dev_cb(struct device_user *dep, enum device_event ev)
 		interface_set_available(iface, false);
 		if (dep->dev && dep->dev->external && !dep->dev->sys_present)
 			interface_set_main_dev(iface, NULL);
+
+		if (!iface->dynamic || !iface->persistent)
+			break;
+
+		/* persistent interfaces skip self-removal on teardown, remove
+		 * them here instead once the device itself is gone */
+		switch (state) {
+		case IFS_DOWN:
+			set_config_state(iface, IFC_REMOVE);
+			break;
+		case IFS_TEARDOWN:
+			if (iface->config_state == IFC_NORMAL)
+				__set_config_state(iface, IFC_REMOVE);
+			break;
+		default:
+			break;
+		}
 		break;
 	case DEV_EVENT_UP:
 		interface_set_enabled(iface, true);
@@ -991,6 +1012,7 @@ interface_alloc(const char *name, struct blob_attr *config, bool dynamic)
 		iface->carrier_loss_delay = delay;
 	}
 	iface->dynamic = dynamic;
+	iface->persistent = blobmsg_get_bool_default(tb[IFACE_ATTR_PERSISTENT], false);
 	iface->proto_ip.no_defaultroute =
 		!blobmsg_get_bool_default(tb[IFACE_ATTR_DEFAULTROUTE], true);
 	iface->proto_ip.no_dns =
@@ -1630,6 +1652,7 @@ interface_change_config(struct interface *if_old, struct interface *if_new)
 	if_old->device = if_new->device;
 	if_old->parent_ifname = if_new->parent_ifname;
 	if_old->dynamic = if_new->dynamic;
+	if_old->persistent = if_new->persistent;
 	if_old->proto_handler = if_new->proto_handler;
 	if_old->force_link = if_new->force_link;
 	if_old->carrier_loss_delay = if_new->carrier_loss_delay;
