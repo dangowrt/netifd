@@ -266,7 +266,7 @@ int interface_parse_data(struct interface *iface, const struct blob_attr *attr)
 
 	iface->updated = 0;
 
-	blob_for_each_attr(cur, attr, rem) {
+	blobmsg_for_each_attr(cur, attr, rem) {
 		ret = interface_add_data(iface, cur);
 		if (ret)
 			return ret;

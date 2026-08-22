@@ -120,11 +120,13 @@ netifd_get_proto_handlers(struct ubus_context *ctx, struct ubus_object *obj,
 
 enum {
 	DI_NAME,
+	DI_DATA,
 	__DI_MAX
 };
 
 static const struct blobmsg_policy dynamic_policy[__DI_MAX] = {
 	[DI_NAME] = { .name = "name", .type = BLOBMSG_TYPE_STRING },
+	[DI_DATA] = { .name = "data", .type = BLOBMSG_TYPE_TABLE },
 };
 
 static int
@@ -135,6 +137,8 @@ netifd_add_dynamic(struct ubus_context *ctx, struct ubus_object *obj,
 	struct blob_attr *tb[__DI_MAX];
 	struct interface *iface;
 	struct blob_attr *config;
+	struct blob_attr *cur;
+	size_t rem;
 
 	blobmsg_parse_attr(dynamic_policy, __DI_MAX, tb, msg);
 
@@ -142,6 +146,13 @@ netifd_add_dynamic(struct ubus_context *ctx, struct ubus_object *obj,
 		return UBUS_STATUS_INVALID_ARGUMENT;
 
 	const char *name = blobmsg_get_string(tb[DI_NAME]);
+
+	if (tb[DI_DATA]) {
+		blobmsg_for_each_attr(cur, tb[DI_DATA], rem) {
+			if (!blobmsg_check_attr(cur, true))
+				return UBUS_STATUS_INVALID_ARGUMENT;
+		}
+	}
 
 	iface = interface_alloc(name, msg, true);
 	if (!iface)
@@ -153,6 +164,12 @@ netifd_add_dynamic(struct ubus_context *ctx, struct ubus_object *obj,
 
 	if (!interface_add(iface, config))
 		goto error_free_config;
+
+	if (tb[DI_DATA]) {
+		iface = vlist_find(&interfaces, name, iface, node);
+		if (iface)
+			return interface_parse_data(iface, tb[DI_DATA]);
+	}
 
 	return UBUS_STATUS_OK;
 
